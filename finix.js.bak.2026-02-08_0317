@@ -1,0 +1,118 @@
+const WebSocket = require("ws");
+const amqp = require("amqplib");
+
+const MQ_HOST = "192.168.245.134";
+const MQ_USER = "fnx";
+const MQ_PASS = "pass";
+const MQ_URL  = `amqp://${MQ_USER}:${MQ_PASS}@${MQ_HOST}:5672`;
+
+const REQ_QUEUE = "core.request";
+const REP_QUEUE = "core.reply";
+const WS_PORT = 8081;
+
+const pending = new Map();
+
+function newCorrelationId() {
+  return `txn_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+}
+
+async function start() {
+  const conn = await amqp.connect(MQ_URL);
+  const ch = await conn.createChannel();
+
+  await ch.assertQueue(REQ_QUEUE, { durable: true });
+  await ch.assertQueue(REP_QUEUE, { durable: true });
+
+  console.log(`[FINIX] Conectado a MQ ${MQ_HOST}. Colas: ${REQ_QUEUE}, ${REP_QUEUE}`);
+  console.log(`[FINIX] WS escuchando en 0.0.0.0:${WS_PORT}`);
+
+  // Consumir respuestas del CORE
+  await ch.consume(REP_QUEUE, (msg) => {
+    if (!msg) return;
+
+    const raw = msg.content.toString();
+    console.log(`[FINIX] <<< Llego a core.reply raw=${raw} props.corr=${msg.properties?.correlationId}`);
+
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      console.error("[FINIX] Respuesta inválida JSON en core.reply:", e.message);
+      ch.ack(msg);
+      return;
+    }
+
+    const corr = data.correlationId || msg.properties?.correlationId;
+    console.log(`[FINIX] corr=${corr} pending.has=${pending.has(corr)}`);
+
+    const ws = pending.get(corr);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data));
+      pending.delete(corr);
+      console.log(`[FINIX] >>> Enviada respuesta al WS corr=${corr}`);
+    } else {
+      console.warn(`[FINIX] No habia WS esperando para corr=${corr} (posible timeout/reconexion)`);
+    }
+
+    ch.ack(msg);
+  }, { noAck: false });
+
+  // WebSocket server
+  const wss = new WebSocket.Server({ port: WS_PORT, host: "0.0.0.0" });
+
+  wss.on("connection", (ws) => {
+    console.log("[FINIX] Cliente WS conectado");
+
+    ws.on("message", (raw) => {
+      let req;
+      try {
+        req = JSON.parse(raw.toString());
+      } catch {
+        ws.send(JSON.stringify({ type: "error", message: "JSON inválido" }));
+        return;
+      }
+
+      const corr = req.correlationId || newCorrelationId();
+      req.correlationId = corr;
+      req.finixTs = new Date().toISOString();
+
+      pending.set(corr, ws);
+
+      console.log(`[FINIX] >>> Publicando a core.request corr=${corr} payload=${JSON.stringify(req)}`);
+
+      ch.sendToQueue(REQ_QUEUE, Buffer.from(JSON.stringify(req)), {
+        persistent: true,
+        correlationId: corr
+      });
+
+      ws.send(JSON.stringify({ type: "ack", correlationId: corr, status: "ENVIADO_A_CORE" }));
+
+      setTimeout(() => {
+        if (pending.has(corr)) {
+          pending.delete(corr);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "txn_response",
+              correlationId: corr,
+              status: "TIMEOUT",
+              message: "No hubo respuesta del CORE a tiempo"
+            }));
+          }
+          console.warn(`[FINIX] TIMEOUT corr=${corr}`);
+        }
+      }, 10000);
+    });
+
+    ws.on("close", () => {
+      for (const [corr, sock] of pending.entries()) {
+        if (sock === ws) pending.delete(corr);
+      }
+      console.log("[FINIX] Cliente WS desconectado");
+    });
+  });
+}
+
+start().catch((e) => {
+  console.error("[FINIX] Error iniciando:", e.message);
+  process.exit(1);
+});
