@@ -41,15 +41,6 @@ El sistema se compone de los siguientes módulos:
 
 ---
 
-## ⚠️ Consideraciones
-
-- Este entorno corresponde a un laboratorio académico
-- No representa un sistema productivo real
-- Algunas configuraciones fueron simplificadas para fines de prueba
-- No contiene credenciales ni información sensible
-
----
-
 ## 🔗 Relación con la Auditoría
 
 Este repositorio complementa el informe de auditoría del entorno BANCORIENDO, proporcionando el contexto técnico de los servicios evaluados, así como soporte para la evidencia generada durante la fase de ejecución.
