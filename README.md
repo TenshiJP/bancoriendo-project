@@ -26,15 +26,6 @@ El sistema se compone de los siguientes módulos:
 - **WebSocket Service (Node.js):** Comunicación en tiempo real
 - **RabbitMQ:** Broker de mensajería para integración de servicios
 - **Node-RED:** Orquestación de flujos de integración
-
----
-
-## 📁 Estructura del Repositorio
-/bancoriendo-project
-  ├── /app-web-php         # Interfaz de cliente
-  ├── /api-tokens          # Microservicio de autenticación
-  ├── /websocket-service   # Servidor de WebSockets (Node.js)
-  └──   /core-services       # Consumidor de RabbitMQ y API Principal
   
 ---
 
